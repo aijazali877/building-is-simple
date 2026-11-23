@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AutoBuild — Autonomous Repo Fixer</title>
+<style>
+  :root {
+    --bg: #0d0f14;
+    --surface: #13161e;
+    --surface2: #1a1e28;
+    --border: #242836;
+    --accent: #4f8ef7;
+    --accent-dim: #2a3f6b;
+    --success: #2ecc6b;
+    --warn: #f7a84f;
+    --error: #f74f4f;
+    --text: #e4e8f5;
+    --text-dim: #6b7490;
+    --text-mid: #9aa0bb;
+    --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    --sans: 'Inter', system-ui, sans-serif;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f0f2f8;
+      --surface: #ffffff;
+      --surface2: #f5f7fc;
+      --border: #d4d9ea;
+      --text: #1a1e2e;
+      --text-dim: #8891aa;
+      --text-mid: #4a5068;
+      --accent-dim: #c8d9ff;
+    }
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; }
+
+  /* Layout */
+  .shell {
+    display: grid;
+    grid-template-rows: 56px 1fr;
+    grid-template-columns: 320px 1fr;
+    height: 100vh;
+    overflow: hidden;
+  }
+  header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .logo {
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: -0.3px;
+    color: var(--accent);
+  }
+  .logo span { color: var(--text); }
+  .header-status {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-dim);
+    font-family: var(--mono);
+  }
+  .dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .dot.live { background: var(--success); box-shadow: 0 0 6px var(--success); animation: pulse 1.6s ease-in-out infinite; }
+  .dot.warn { background: var(--warn); }
+  .dot.error { background: var(--error); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+  /* Sidebar */
+  aside {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: 16px;
+    gap: 14px;
+  }
+  .section-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 2px;
+  }
+  label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--text-mid); }
+  input, select {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 8px 10px;
+    font-size: 12px;
+    font-family: var(--mono);
+    outline: none;
+    transition: border-color .15s;
+  }
+  input:focus, select:focus { border-color: var(--accent); }
+  .input-group { display: flex; flex-direction: column; gap: 8px; }
+
+  .btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: 7px;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s, transform .1s;
+    width: 100%;
+  }
+  .btn:active { transform: scale(.98); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { opacity: .88; }
+  .btn-ghost { background: var(--surface2); color: var(--text-mid); border: 1px solid var(--border); }
+  .btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+  .btn-danger { background: transparent; color: var(--error); border: 1px solid var(--error); }
+
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-mid);
+  }
+  .toggle {
+    position: relative; width: 34px; height: 18px;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; inset: 0; background: var(--border);
+    border-radius: 20px; cursor: pointer; transition: .2s;
+  }
+  .slider:before {
+    content: ''; position: absolute;
+    width: 12px; height: 12px;
+    left: 3px; top: 3px;
+    background: #fff; border-radius: 50%; transition: .2s;
+  }
+  input:checked + .slider { background: var(--accent); }
+  input:checked + .slider:before { transform: translateX(16px); }
+
+  .attempts-row {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .attempts-row input[type=range] {
+    flex: 1; padding: 0; height: 4px; cursor: pointer;
+    accent-color: var(--accent);
+  }
+  .attempts-val {
+    font-family: var(--mono); font-size: 12px;
+    color: var(--accent); min-width: 16px;
+  }
+
+  .sidebar-sep { border: none; border-top: 1px solid var(--border); }
+
+  /* Main area */
+  main {
+    display: grid;
+    grid-template-rows: 1fr 220px;
+    overflow: hidden;
+  }
+
+  /* Log panel */
+  .log-panel {
+    overflow-y: auto;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .log-entry {
+    display: grid;
+    grid-template-columns: 68px 1fr;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.6;
+    padding: 1px 0;
+  }
+  .log-time { color: var(--text-dim); }
+  .log-msg { color: var(--text); }
+  .log-msg.info { color: var(--text-mid); }
+  .log-msg.success { color: var(--success); }
+  .log-msg.warn { color: var(--warn); }
+  .log-msg.error { color: var(--error); }
+  .log-msg.accent { color: var(--accent); }
+  .log-msg.gemini { color: #c084fc; }
+
+  /* Summary card */
+  .summary-panel {
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    padding: 16px 20px;
+    overflow-y: auto;
+  }
+  .summary-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+  }
+  .summary-bullets {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .summary-bullets li {
+    display: flex;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-mid);
+    line-height: 1.5;
+  }
+  .summary-bullets li::before {
+    content: '▸';
+    color: var(--accent);
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .summary-bullets li.ok::before { color: var(--success); }
+  .summary-bullets li.bad::before { color: var(--error); }
+  .summary-bullets li.warn::before { color: var(--warn); }
+
+  /* Attempt badges */
+  .attempt-track {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  .attempt-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .attempt-badge.active { border-color: var(--accent); color: var(--accent); }
+  .attempt-badge.done { border-color: var(--success); color: var(--success); }
+  .attempt-badge.fail { border-color: var(--error); color: var(--error); }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+
+  .empty-state {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    height: 100%; gap: 10px; opacity: .4;
+    font-size: 13px; color: var(--text-dim);
+  }
+  .empty-icon { font-size: 32px; }
+
+  @media (max-width: 700px) {
+    .shell { grid-template-columns: 1fr; grid-template-rows: 56px auto 1fr 200px; }
+    aside { max-height: 400px; }
+    main { grid-template-rows: 1fr 180px; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header>
+    <div class="logo">Auto<span>Build</span></div>
+    <div class="header-status" id="headerStatus">
+      <span class="dot" id="statusDot"></span><span id="statusText">Ready</span>
+    </div>
+  </header>
+
+  <aside>
+    <div class="section-label">Repository</div>
+    <div class="input-group">
+      <div>
+        <label>Repo URL</label>
+        <input id="repoUrl" type="text" value="https://github.com/aijazali877/building-is-simple" placeholder="https://github.com/user/repo">
+      </div>
+      <div>
+        <label>Branch</label>
+        <input id="branchName" type="text" value="main" placeholder="main">
+      </div>
+    </div>
+
+    <hr class="sidebar-sep">
+    <div class="section-label">API Keys (server-side)</div>
+    <div class="input-group">
+      <div>
+        <label>GitHub Token</label>
+        <input id="ghToken" type="password" placeholder="github_pat_...">
+      </div>
+      <div>
+        <label>Gemini API Key</label>
+        <input id="geminiKey" type="password" placeholder="AIza...">
+      </div>
+      <div>
+        <label>Gemini Model</label>
+        <input id="geminiModel" type="text" value="gemini-2.5-flash" placeholder="gemini-2.5-flash">
+      </div>
+    </div>
+
+    <hr class="sidebar-sep">
+    <div class="section-label">Options</div>
+    <div class="input-group">
+      <div class="toggle-row">
+        <span>Auto-create missing build files</span>
+        <label class="toggle"><input type="checkbox" id="autoCreate" checked><span class="slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <span>Auto-fix project structure</span>
+        <label class="toggle"><input type="checkbox" id="autoFix" checked><span class="slider"></span></label>
+      </div>
+      <div>
+        <label>Max fix attempts</label>
+        <div class="attempts-row">
+          <input type="range" id="maxAttempts" min="1" max="8" value="4">
+          <span class="attempts-val" id="attemptsVal">4</span>
+        </div>
+      </div>
+    </div>
+
+    <hr class="sidebar-sep">
+    <button class="btn btn-primary" id="startBtn" onclick="startBuild()">⚡ Start AutoBuild</button>
+    <button class="btn btn-ghost" id="stopBtn" onclick="stopBuild()" disabled>■ Stop</button>
+    <button class="btn btn-ghost" onclick="clearLog()">Clear Log</button>
+  </aside>
+
+  <main>
+    <div class="log-panel" id="logPanel">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">🔧</div>
+        <div>Configure your repo and hit Start AutoBuild</div>
+      </div>
+    </div>
+    <div class="summary-panel" id="summaryPanel">
+      <div class="summary-title">Build Summary</div>
+      <div id="attemptTrack" class="attempt-track"></div>
+      <ul class="summary-bullets" id="summaryList">
+        <li style="color:var(--text-dim);font-size:12px;">No build run yet.</li>
+      </ul>
+    </div>
+  </main>
+
+</div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+let stopped = false;
+let running = false;
+const stats = { created: [], changed: [], removed: [], errorsFixed: [], attempt: 0, success: false };
+
+// ─── Attempt slider ───────────────────────────────────────────────────────────
+document.getElementById('maxAttempts').addEventListener('input', e => {
+  document.getElementById('attemptsVal').textContent = e.target.value;
+});
+
+// ─── Logging ─────────────────────────────────────────────────────────────────
+function ts() {
+  const d = new Date();
+  return d.toTimeString().slice(0,8);
+}
+function log(msg, type = '') {
+  const panel = document.getElementById('logPanel');
+  const empty = document.getElementById('emptyState');
+  if (empty) empty.remove();
+
+  const row = document.createElement('div');
+  row.className = 'log-entry';
+  row.innerHTML = `<span class="log-time">${ts()}</span><span class="log-msg ${type}">${escHtml(msg)}</span>`;
+  panel.appendChild(row);
+  panel.scrollTop = panel.scrollHeight;
+}
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function clearLog() {
+  const p = document.getElementById('logPanel');
+  p.innerHTML = `<div class="empty-state" id="emptyState"><div class="empty-icon">🔧</div><div>Configure your repo and hit Start AutoBuild</div></div>`;
+  document.getElementById('summaryList').innerHTML = '<li style="color:var(--text-dim);font-size:12px;">No build run yet.</li>';
+  document.getElementById('attemptTrack').innerHTML = '';
+  setStatus('Ready', '');
+}
+
+// ─── Status dot ──────────────────────────────────────────────────────────────
+function setStatus(text, state) {
+  document.getElementById('statusText').textContent = text;
+  const dot = document.getElementById('statusDot');
+  dot.className = 'dot' + (state ? ' ' + state : '');
+}
+
+// ─── Stop ─────────────────────────────────────────────────────────────────────
+function stopBuild() {
+  stopped = true;
+  log('User stopped the build.', 'warn');
+  setStatus('Stopped', 'warn');
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  running = false;
+}
+
+// ─── GitHub API helpers ───────────────────────────────────────────────────────
+function parseRepo(url) {
+  const m = url.trim().replace(/\.git$/, '').match(/github\.com[/:]([^/]+)\/([^/]+)/);
+  if (!m) throw new Error('Cannot parse GitHub URL: ' + url);
+  return { owner: m[1], repo: m[2] };
+}
+
+async function ghGet(path, token) {
+  const r = await fetch(`https://api.github.com${path}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
+  });
+  if (!r.ok) throw new Error(`GitHub GET ${path} → ${r.status}`);
+  return r.json();
+}
+
+async function ghGetContent(owner, repo, filePath, branch, token) {
+  try {
+    const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
+    });
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error(`GitHub content ${filePath} → ${r.status}`);
+    return r.json();
+  } catch { return null; }
+}
+
+async function ghPutFile(owner, repo, filePath, content, message, branch, token, sha) {
+  const body = { message, content: btoa(unescape(encodeURIComponent(content))), branch };
+  if (sha) body.sha = sha;
+  const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    throw new Error(`GitHub PUT ${filePath} → ${r.status}: ${e.message || ''}`);
+  }
+  return r.json();
+}
+
+async function ghDeleteFile(owner, repo, filePath, message, branch, token, sha) {
+  const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, sha, branch })
+  });
+  if (!r.ok) throw new Error(`GitHub DELETE ${filePath} → ${r.status}`);
+  return r.json();
+}
+
+async function ghListDir(owner, repo, dirPath, branch, token) {
+  try {
+    const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${dirPath}?ref=${branch}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
+    });
+    if (!r.ok) return [];
+    const data = await r.json();
+    return Array.isArray(data) ? data : [];
+  } catch { return []; }
+}
+
+async function ghListAllFiles(owner, repo, branch, token) {
+  try {
+    const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
+    });
+    if (!r.ok) return [];
+    const data = await r.json();
+    return (data.tree || []).filter(f => f.type === 'blob').map(f => f.path);
+  } catch { return []; }
+}
+
+async function ghTriggerWorkflow(owner, repo, workflowFile, branch, token) {
+  const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflowFile}/dispatches`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ref: branch })
+  });
+  return r.ok;
+}
+
+async function ghGetLatestRun(owner, repo, branch, token) {
+  const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs?branch=${branch}&per_page=1`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
+  });
+  if (!r.ok) return null;
+  const data = await r.json();
+  return data.workflow_runs?.[0] || null;
+}
+
+async function ghGetRunLogs(owner, repo, runId, token) {
+  // Returns log URL; actual log download requires redirect handling
+  const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs/${runId}/logs`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+    redirect: 'follow'
+  });
+  if (!r.ok) return null;
+  const text = await r.text().catch(() => null);
+  return text;
+}
+
+async function ghGetJobLogs(owner, repo, runId, token) {
+  try {
+    const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs/${runId}/jobs`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
+    });
+    if (!r.ok) return '';
+    const data = await r.json();
+    const jobs = data.jobs || [];
+    let out = '';
+    for (const job of jobs) {
+      out += `\n=== JOB: ${job.name} [${job.conclusion || job.status}] ===\n`;
+      for (const step of (job.steps || [])) {
+        out += `  STEP: ${step.name} → ${step.conclusion || step.status}\n`;
+      }
+      // Try to get step logs
+      const lr = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/jobs/${job.id}/logs`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+        redirect: 'follow'
+      });
+      if (lr.ok) {
+        const lt = await lr.text().catch(() => '');
+        // Trim to last 8000 chars for free-tier token limits
+        out += lt.slice(-8000) + '\n';
+      }
+    }
+    return out;
+  } catch (e) { return ''; }
+}
+
+async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function waitForRun(owner, repo, branch, token, afterTime) {
+  log('Waiting for GitHub Actions run to appear…', 'info');
+  for (let i = 0; i < 30; i++) {
+    await sleep(4000);
+    const run = await ghGetLatestRun(owner, repo, branch, token);
+    if (run && new Date(run.created_at) > new Date(afterTime - 5000)) return run;
+    if (i % 5 === 4) log(`Still waiting for run… (${i+1}/30)`, 'info');
+  }
+  return null;
+}
+
+async function waitForRunComplete(owner, repo, runId, token) {
+  for (let i = 0; i < 90; i++) {
+    await sleep(5000);
+    const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs/${runId}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
+    });
+    if (!r.ok) continue;
+    const data = await r.json();
+    if (data.status === 'completed') return data;
+    if (i % 6 === 5) log(`Build running… (${Math.round((i+1)*5/60*10)/10} min elapsed)`, 'info');
+  }
+  return null;
+}
+
+// ─── Gemini API ───────────────────────────────────────────────────────────────
+async function askGemini(geminiKey, model, prompt) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
+  const body = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { maxOutputTokens: 8192, temperature: 0.2 }
+  };
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    throw new Error(`Gemini ${r.status}: ${e.error?.message || 'unknown'}`);
+  }
+  const data = await r.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+// ─── Project detection & scaffold ────────────────────────────────────────────
+function detectProjectType(files) {
+  const s = files.join('\n');
+  if (s.includes('build.gradle.kts') || s.includes('settings.gradle.kts') || s.includes('build.gradle')) return 'android';
+  if (s.includes('package.json')) return s.includes('next.config') ? 'nextjs' : 'node';
+  if (s.includes('pom.xml')) return 'maven';
+  if (s.includes('Cargo.toml')) return 'rust';
+  if (s.includes('requirements.txt') || s.includes('pyproject.toml') || s.includes('setup.py')) return 'python';
+  if (s.includes('pubspec.yaml')) return 'flutter';
+  if (s.includes('*.csproj') || s.includes('.sln')) return 'dotnet';
+  return 'unknown';
+}
+
+function getScaffoldFiles(projectType, projectName) {
+  const name = projectName || 'app';
+  if (projectType === 'android') {
+    return {
+      'settings.gradle.kts': `pluginManagement {\n    repositories {\n        google()\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\ndependencyResolutionManagement {\n    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)\n    repositories {\n        google()\n        mavenCentral()\n    }\n}\nrootProject.name = "${name}"\ninclude(":app")\n`,
+      'build.gradle.kts': `buildscript {\n    dependencies {\n        classpath("com.android.tools.build:gradle:8.3.0")\n        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22")\n    }\n}\ntasks.register("clean", Delete::class) {\n    delete(rootProject.buildDir)\n}\n`,
+      'gradle.properties': `org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8\nandroid.useAndroidX=true\nkotlin.code.style=official\nandroid.nonTransitiveRClass=true\n`,
+      'app/build.gradle.kts': `plugins {\n    id("com.android.application")\n    id("org.jetbrains.kotlin.android")\n}\n\nandroid {\n    namespace = "com.example.${name.toLowerCase().replace(/[^a-z0-9]/g,'_')}"\n    compileSdk = 34\n    defaultConfig {\n        applicationId = "com.example.${name.toLowerCase().replace(/[^a-z0-9]/g,'_')}"\n        minSdk = 24\n        targetSdk = 34\n        versionCode = 1\n        versionName = "1.0"\n    }\n    buildTypes {\n        release {\n            isMinifyEnabled = false\n        }\n    }\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_1_8\n        targetCompatibility = JavaVersion.VERSION_1_8\n    }\n    kotlinOptions {\n        jvmTarget = "1.8"\n    }\n}\n\ndependencies {\n    implementation("androidx.core:core-ktx:1.12.0")\n    implementation("androidx.appcompat:appcompat:1.6.1")\n    implementation("com.google.android.material:material:1.11.0")\n    testImplementation("junit:junit:4.13.2")\n    androidTestImplementation("androidx.test.ext:junit:1.1.5")\n    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")\n}\n`,
+      '.github/workflows/android.yml': `name: Android Build\n\non:\n  push:\n    branches: [ main, master ]\n  pull_request:\n    branches: [ main, master ]\n  workflow_dispatch:\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Set up JDK 17\n        uses: actions/setup-java@v4\n        with:\n          java-version: '17'\n          distribution: 'temurin'\n      - name: Grant execute permission for gradlew\n        run: chmod +x gradlew\n      - name: Build with Gradle\n        run: ./gradlew assembleDebug\n      - name: Upload APK\n        uses: actions/upload-artifact@v4\n        with:\n          name: debug-apk\n          path: app/build/outputs/apk/debug/*.apk\n`
+    };
+  }
+  if (projectType === 'node' || projectType === 'nextjs') {
+    return {
+      '.github/workflows/node.yml': `name: Node.js Build\n\non:\n  push:\n    branches: [ main, master ]\n  workflow_dispatch:\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: '20'\n          cache: 'npm'\n      - run: npm ci\n      - run: npm run build --if-present\n`
+    };
+  }
+  if (projectType === 'maven') {
+    return {
+      '.github/workflows/maven.yml': `name: Java Maven Build\n\non:\n  push:\n    branches: [ main, master ]\n  workflow_dispatch:\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-java@v4\n        with:\n          java-version: '17'\n          distribution: 'temurin'\n          cache: maven\n      - run: mvn -B package --file pom.xml\n`
+    };
+  }
+  if (projectType === 'python') {
+    return {
+      '.github/workflows/python.yml': `name: Python Build\n\non:\n  push:\n    branches: [ main, master ]\n  workflow_dispatch:\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-python@v5\n        with:\n          python-version: '3.11'\n      - run: pip install -r requirements.txt\n      - run: python -m pytest || true\n`
+    };
+  }
+  // Generic fallback
+  return {
+    '.github/workflows/build.yml': `name: Build\n\non:\n  push:\n    branches: [ main, master ]\n  workflow_dispatch:\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Repo info\n        run: ls -la && echo "Build placeholder — configure your build command here"\n`
+  };
+}
+
+function getWorkflowFile(projectType) {
+  const map = { android: 'android.yml', node: 'node.yml', nextjs: 'node.yml', maven: 'maven.yml', python: 'python.yml', flutter: 'flutter.yml' };
+  return map[projectType] || 'build.yml';
+}
+
+// ─── Attempt badge helpers ────────────────────────────────────────────────────
+function setBadge(n, state) {
+  const badge = document.getElementById(`badge-${n}`);
+  if (badge) { badge.className = `attempt-badge ${state}`; }
+}
+function addBadge(n) {
+  const track = document.getElementById('attemptTrack');
+  const b = document.createElement('span');
+  b.className = 'attempt-badge';
+  b.id = `badge-${n}`;
+  b.textContent = `Attempt ${n}`;
+  track.appendChild(b);
+}
+
+// ─── Summary ──────────────────────────────────────────────────────────────────
+function updateSummary(s) {
+  const ul = document.getElementById('summaryList');
+  ul.innerHTML = '';
+  const items = [
+    { cls: s.success ? 'ok' : 'bad', text: `Build status: ${s.success ? '✅ SUCCESS' : '❌ FAILED'} (attempt ${s.attempt} of ${s.maxAttempts})` },
+    s.created.length  ? { cls: 'ok',   text: `Files created: ${s.created.join(', ')}` }  : null,
+    s.changed.length  ? { cls: 'warn', text: `Files changed: ${s.changed.join(', ')}` }  : null,
+    s.removed.length  ? { cls: 'warn', text: `Files removed: ${s.removed.join(', ')}` }  : null,
+    s.errorsFixed.length ? { cls: 'ok', text: `Errors fixed: ${s.errorsFixed.slice(-3).join(' | ')}` } : null,
+    !s.success && s.lastError ? { cls: 'bad', text: `Last error: ${s.lastError.slice(0, 160)}` } : null
+  ].filter(Boolean);
+
+  for (const item of items) {
+    const li = document.createElement('li');
+    li.className = item.cls;
+    li.textContent = item.text;
+    ul.appendChild(li);
+  }
+}
+
+// ─── Main build orchestration ─────────────────────────────────────────────────
+async function startBuild() {
+  if (running) return;
+  running = true; stopped = false;
+
+  const repoUrl   = document.getElementById('repoUrl').value.trim();
+  const branch    = document.getElementById('branchName').value.trim() || 'main';
+  const ghToken   = document.getElementById('ghToken').value.trim();
+  const geminiKey = document.getElementById('geminiKey').value.trim();
+  const model     = document.getElementById('geminiModel').value.trim() || 'gemini-2.5-flash';
+  const autoCreate = document.getElementById('autoCreate').checked;
+  const autoFix   = document.getElementById('autoFix').checked;
+  const maxAttempts = parseInt(document.getElementById('maxAttempts').value);
+
+  if (!repoUrl || !ghToken || !geminiKey) {
+    log('Missing: Repo URL, GitHub Token, or Gemini API Key.', 'error');
+    running = false;
+    return;
+  }
+
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+  document.getElementById('attemptTrack').innerHTML = '';
+  document.getElementById('summaryList').innerHTML = '';
+
+  // Reset stats
+  Object.assign(stats, { created: [], changed: [], removed: [], errorsFixed: [], attempt: 0, success: false, lastError: '', maxAttempts });
+
+  let owner, repo;
+  try {
+    ({ owner, repo } = parseRepo(repoUrl));
+  } catch (e) {
+    log(e.message, 'error');
+    running = false;
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+    return;
+  }
+
+  setStatus('Connecting…', 'live');
+  log(`=== AutoBuild started ===`, 'accent');
+  log(`Repo: ${owner}/${repo}  Branch: ${branch}`, 'info');
+
+  // ── Step 1: inspect repo ──────────────────────────────────────────────────
+  log('Inspecting repository structure…', 'info');
+  let allFiles;
+  try {
+    allFiles = await ghListAllFiles(owner, repo, branch, ghToken);
+    log(`Found ${allFiles.length} files in repo.`, 'info');
+  } catch (e) {
+    log(`Failed to list repo files: ${e.message}`, 'error');
+    running = false;
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+    return;
+  }
+
+  if (stopped) return finish();
+
+  const projectType = detectProjectType(allFiles);
+  log(`Detected project type: ${projectType.toUpperCase()}`, 'accent');
+
+  // ── Step 2: scaffold missing files ────────────────────────────────────────
+  if (autoCreate) {
+    setStatus('Scaffolding…', 'live');
+    log('Checking for missing build/config files…', 'info');
+
+    const scaffold = getScaffoldFiles(projectType, repo);
+    for (const [filePath, content] of Object.entries(scaffold)) {
+      if (stopped) break;
+      const existing = await ghGetContent(owner, repo, filePath, branch, ghToken);
+      if (!existing) {
+        log(`Creating missing file: ${filePath}`, 'warn');
+        try {
+          await ghPutFile(owner, repo, filePath, content, `[AutoBuild] Create ${filePath}`, branch, ghToken, null);
+          stats.created.push(filePath);
+          log(`Created: ${filePath}`, 'success');
+        } catch (e) {
+          log(`Failed to create ${filePath}: ${e.message}`, 'error');
+        }
+      } else {
+        log(`File exists: ${filePath}`, 'info');
+      }
+    }
+
+    // Check for gradlew for Android projects
+    if (projectType === 'android' && !allFiles.includes('gradlew')) {
+      log('Android project missing gradlew — adding wrapper properties…', 'warn');
+      try {
+        const wrapperProps = `distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-8.6-bin.zip\nnetworkTimeout=10000\nvalidateDistributionUrl=true\nzipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n`;
+        const existing = await ghGetContent(owner, repo, 'gradle/wrapper/gradle-wrapper.properties', branch, ghToken);
+        await ghPutFile(owner, repo, 'gradle/wrapper/gradle-wrapper.properties', wrapperProps,
+          '[AutoBuild] Add Gradle wrapper properties', branch, ghToken, existing?.sha || null);
+        stats.created.push('gradle/wrapper/gradle-wrapper.properties');
+      } catch (e) {
+        log(`Wrapper properties: ${e.message}`, 'error');
+      }
+    }
+  }
+
+  if (stopped) return finish();
+
+  // ── Step 3: trigger initial build ─────────────────────────────────────────
+  const workflowFile = getWorkflowFile(projectType);
+  let attempt = 0;
+
+  while (attempt < maxAttempts && !stopped) {
+    attempt++;
+    stats.attempt = attempt;
+    addBadge(attempt);
+    setBadge(attempt, 'active');
+
+    setStatus(`Attempt ${attempt}/${maxAttempts}`, 'live');
+    log(`─── Attempt ${attempt} / ${maxAttempts} ───`, 'accent');
+
+    // Trigger workflow
+    const triggerTime = Date.now();
+    log(`Triggering workflow: ${workflowFile}…`, 'info');
+    const triggered = await ghTriggerWorkflow(owner, repo, workflowFile, branch, ghToken);
+    if (!triggered) {
+      log('workflow_dispatch trigger failed — workflow may auto-trigger on push. Waiting for latest run…', 'warn');
+    }
+
+    // Wait for run to appear
+    await sleep(6000);
+    const run = await waitForRun(owner, repo, branch, ghToken, triggerTime);
+    if (!run) {
+      log('No GitHub Actions run found. Workflow may not exist or is disabled.', 'error');
+      setBadge(attempt, 'fail');
+      stats.lastError = 'No Actions run found';
+      break;
+    }
+
+    log(`Run #${run.run_number} started — waiting for completion…`, 'info');
+    const completedRun = await waitForRunComplete(owner, repo, run.id, ghToken);
+    if (!completedRun) {
+      log('Run timed out waiting for completion.', 'warn');
+      setBadge(attempt, 'fail');
+      stats.lastError = 'Run timed out';
+      if (attempt >= maxAttempts) break;
+      continue;
+    }
+
+    log(`Run ${completedRun.run_number} → ${completedRun.conclusion?.toUpperCase() || 'UNKNOWN'}`, completedRun.conclusion === 'success' ? 'success' : 'error');
+
+    if (completedRun.conclusion === 'success') {
+      setBadge(attempt, 'done');
+      stats.success = true;
+      log('✅ Build succeeded!', 'success');
+      setStatus('Success', 'live');
+      break;
+    }
+
+    // ── Build failed — get logs ──
+    setBadge(attempt, 'fail');
+    if (attempt >= maxAttempts) {
+      log('Max attempts reached. Stopping.', 'warn');
+      break;
+    }
+
+    if (stopped) break;
+
+    // Get logs
+    log('Fetching build logs…', 'info');
+    let buildLogs = await ghGetJobLogs(owner, repo, completedRun.id, ghToken);
+    if (!buildLogs) buildLogs = `Run ${completedRun.id} failed — could not fetch logs`;
+
+    // Trim logs for Gemini free-tier limits
+    const trimmedLogs = buildLogs.slice(-6000);
+
+    // Gather relevant file contents to give Gemini context
+    const keyFiles = ['build.gradle.kts', 'app/build.gradle.kts', 'settings.gradle.kts',
+      'package.json', 'pom.xml', 'Cargo.toml', 'requirements.txt',
+      '.github/workflows/' + workflowFile];
+    let fileContext = '';
+    for (const f of keyFiles) {
+      if (stopped) break;
+      if (allFiles.includes(f)) {
+        const fc = await ghGetContent(owner, repo, f, branch, ghToken);
+        if (fc?.content) {
+          const decoded = atob(fc.content.replace(/\n/g, ''));
+          fileContext += `\n\n--- FILE: ${f} ---\n${decoded.slice(0, 1500)}`;
+        }
+      }
+    }
+
+    // Ask Gemini
+    log('Sending error logs to Gemini for analysis…', 'gemini');
+    const geminiPrompt = `You are an expert build engineer. A GitHub Actions build failed for a ${projectType} project.
+
+BUILD LOGS (last 6000 chars):
+${trimmedLogs}
+
+RELEVANT FILE CONTENTS:${fileContext}
+
+Analyze the errors and respond ONLY with a JSON object (no markdown, no explanation outside JSON):
+{
+  "errorSummary": "1-2 sentence summary of the root cause",
+  "fixes": [
+    {
+      "file": "relative/path/to/file",
+      "action": "create|update|delete",
+      "content": "full new file content as a string (use \\n for newlines)",
+      "reason": "why this fixes the error"
+    }
+  ]
+}
+
+Rules:
+- Fix only real build errors, not style issues
+- For 'delete', content can be empty string
+- For Android: use compileSdk 34, minSdk 24, Gradle 8.6, JDK 17, Kotlin 1.9.22
+- For Node.js: use Node 20, npm ci, standard package scripts
+- Keep fixes minimal and targeted
+- Maximum 5 fixes per response`;
+
+    let geminiResponse;
+    try {
+      geminiResponse = await askGemini(geminiKey, model, geminiPrompt);
+    } catch (e) {
+      log(`Gemini error: ${e.message}`, 'error');
+      stats.lastError = e.message;
+      continue;
+    }
+
+    // Parse Gemini JSON
+    let parsed;
+    try {
+      const clean = geminiResponse.replace(/```json|```/g, '').trim();
+      parsed = JSON.parse(clean);
+    } catch {
+      log('Gemini response could not be parsed as JSON. Logging raw…', 'warn');
+      log(geminiResponse.slice(0, 300), 'gemini');
+      stats.lastError = 'Gemini JSON parse failed';
+      continue;
+    }
+
+    log(`Gemini: ${parsed.errorSummary || 'Analysis complete'}`, 'gemini');
+    stats.errorsFixed.push(parsed.errorSummary || 'build error');
+    stats.lastError = parsed.errorSummary || '';
+
+    if (!parsed.fixes?.length) {
+      log('Gemini found no actionable fixes. Skipping attempt.', 'warn');
+      continue;
+    }
+
+    // Apply fixes
+    setStatus('Applying fixes…', 'warn');
+    for (const fix of parsed.fixes) {
+      if (stopped) break;
+      if (!fix.file) continue;
+      log(`${fix.action?.toUpperCase() || 'UPDATE'}: ${fix.file} — ${fix.reason || ''}`, 'warn');
+
+      try {
+        if (fix.action === 'delete') {
+          const existing = await ghGetContent(owner, repo, fix.file, branch, ghToken);
+          if (existing?.sha) {
+            await ghDeleteFile(owner, repo, fix.file, `[AutoBuild] Remove ${fix.file}`, branch, ghToken, existing.sha);
+            stats.removed.push(fix.file);
+          }
+        } else {
+          const existing = await ghGetContent(owner, repo, fix.file, branch, ghToken);
+          await ghPutFile(owner, repo, fix.file, fix.content || '', `[AutoBuild] Fix ${fix.file}: ${(fix.reason||'').slice(0,60)}`, branch, ghToken, existing?.sha || null);
+          if (existing) { stats.changed.push(fix.file); }
+          else { stats.created.push(fix.file); }
+        }
+        log(`Applied: ${fix.file}`, 'success');
+      } catch (e) {
+        log(`Failed to apply fix for ${fix.file}: ${e.message}`, 'error');
+      }
+    }
+
+    // Refresh file list
+    allFiles = await ghListAllFiles(owner, repo, branch, ghToken).catch(() => allFiles);
+
+    log('Fixes pushed. Re-running build…', 'info');
+    await sleep(3000); // let GitHub process commits
+  }
+
+  finish();
+
+  function finish() {
+    running = false;
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+    if (!stopped) {
+      setStatus(stats.success ? 'Success ✓' : 'Failed', stats.success ? 'live' : 'error');
+      log(`=== AutoBuild complete — ${stats.success ? 'SUCCESS' : 'FAILED'} ===`, stats.success ? 'success' : 'error');
+    }
+    updateSummary(stats);
+  }
+}
+</script>
+</body>
+</html>
